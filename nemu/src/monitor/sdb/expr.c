@@ -3,11 +3,16 @@
 /* We use the POSIX regex functions to process regular expressions.
  * Type 'man regex' for more information about POSIX regex functions.
  */
+#include <memory/paddr.h>
 #include <regex.h>
 
 enum {
   TK_NOTYPE = 256, TK_EQ,
-
+  TK_DNUM, TK_HNUM,
+  TK_NEQ,
+  TK_AND,
+  TK_DEREF,
+  TK_NEG,
   /* TODO: Add more token types */
 
 };
@@ -24,6 +29,15 @@ static struct rule {
   {" +", TK_NOTYPE},    // spaces
   {"\\+", '+'},         // plus
   {"==", TK_EQ},        // equal
+  {"\\b[0-9]+\\b", TK_DNUM}, // decimal-number
+  {"0[xX][0-9a-fA-F]+", TK_HNUM}, // hexadecimal-number
+  {"-", '-'},			// sub
+  {"\\*", '*'},			// mul
+  {"\\/", '/'},			// div
+  {"\\(", '('},			// left
+  {"\\)", ')'},			// right
+  {"!=", TK_NEQ},		// not equal
+  {"&&", TK_AND},		// &&
 };
 
 #define NR_REGEX ARRLEN(rules)
@@ -80,6 +94,28 @@ static bool make_token(char *e) {
          */
 
         switch (rules[i].token_type) {
+                  case TK_DNUM:
+		  case TK_HNUM:
+				if(substr_len > 32) {
+					printf("ERROR! the length of num in this expr is longer than 32bit\n");
+					assert(0);
+						
+				}
+
+		  case '+':
+		  case '-':
+		  case '*':
+		  case '/':
+		  case '(':
+		  case ')': 
+		  
+		  case TK_EQ:
+                  case TK_NEQ:
+		  case TK_AND:
+				strncpy(tokens[nr_token].str,substr_start, substr_len); 
+				tokens[nr_token].type = rules[i].token_type; 
+				nr_token++;
+				break;
           default: TODO();
         }
 
@@ -95,16 +131,145 @@ static bool make_token(char *e) {
 
   return true;
 }
+bool check_parenteses(uint32_t p, uint32_t q) {
+	int flag = 0;
 
+	if (strcmp(tokens[p].str,"(") || strcmp(tokens[q].str,")")) return false;	
+	p++;
+	while(p < q) { 
+		if(strcmp(tokens[p].str,"(") == 0) {
+			p++;
+			flag++;	
+		} else if(strcmp(tokens[p].str,")") == 0) {
+			p++;
+			flag--;
+			if(flag < 0) return false;
+		} else p++;
+	}	
 
-word_t expr(char *e, bool *success) {
-  if (!make_token(e)) {
+	return flag==0;
+}
+
+uint32_t getOpPosition(uint32_t p, uint32_t q) {
+	
+
+	assert(p <= q);
+	/*
+	 * TODO: you need to check the parenteses, or you will get the wrong position.
+	 *		 for example, (1 + 2) * 3. if you don't check the parenteses, you will
+	 *       get the '+' position,nor the '*' position.
+	 */
+	uint32_t i = p;
+	uint32_t op = p;
+	int pnum = 0;
+
+	for (i = p; i < q; i++) 
+	{					
+		if(strcmp(tokens[i].str, "(") == 0) pnum++;
+	    if(strcmp(tokens[i].str, ")") == 0) pnum--;
+		
+		
+		if (pnum == 0)
+			if (strcmp(tokens[i].str, "+") == 0 || strcmp(tokens[i].str, "-") == 0 ||
+				strcmp(tokens[i].str, "*") == 0 || strcmp(tokens[i].str, "/") == 0 ||
+		        tokens[i].type == TK_DEREF|| /* pointer */ 
+				tokens[i].type == TK_EQ || tokens[i].type == TK_NEQ ||  tokens[i].type == TK_AND) 
+			{
+				op = i; 
+				break;
+			}
+		
+	}
+	return op;
+		
+}
+uint32_t eval(uint32_t p, uint32_t q) {
+
+	if (p > q) {
+		printf("Wrong!");
+		assert(0);
+
+	}
+	 if (p == q) {
+		 uint32_t value = 0;
+		 if (tokens[p].type == TK_DNUM)
+			 value = strtoul(tokens[p].str, NULL, 10);
+		 
+		 if (tokens[p].type == TK_HNUM) 
+			 value = strtoul(tokens[p].str, NULL, 16);
+		 return value;
+	} else if (check_parenteses(p, q) == true) {
+		printf("check parenteses is true, p = %u, q = %u\n", p, q);	
+		return eval(p + 1, q - 1);
+	
+	} else {
+	
+		int op = getOpPosition(p, q); 
+		uint32_t val1 = 0;
+		if(tokens[op].type != TK_DEREF &&  
+		   tokens[op].type != TK_NEG)	   
+			val1 = eval(p, op - 1);
+		uint32_t val2 = eval(op + 1, q);	
+		switch (tokens[op].type) {
+			case '+': return val1 + val2;
+			case '-': return val1 - val2;
+		 	case '*': return val1 * val2;
+		 	case '/': return val1 / val2; /* TODO: what about val2 is zero? */
+			case TK_DEREF:	return paddr_read(val2,4);
+			case TK_EQ:		return val1 == val2 ? 1 : 0;
+			case TK_NEQ:    return val1 != val2 ? 1 : 0;
+			case TK_AND:	return val1 && val2 ? 1 : 0;
+			case TK_NEG:	return -val2;
+			default: assert(0);
+				
+		}
+		
+	}
+	
+	return 0;
+}
+
+bool certain_type_for_deref(int type) {
+	
+	switch(type) {
+		case '+':
+		case '-':
+		case '*':
+		case '/': return true; 
+		default : return false;
+	}
+}
+
+bool certain_type_for_neg(int type) {
+	switch(type) {
+		case '+':
+		case '-':
+		case '*':
+		case '/': 
+		case '(': return true; 
+		default : return false;
+	}
+}
+
+uint32_t expr(char *e, bool *success) {
+if (!make_token(e)) {
     *success = false;
     return 0;
   }
 
+   *success = true; 
+ int i;
+  for (i = 0; i < nr_token; i++) {
+	if (tokens[i].type == '*' && (i == 0 || certain_type_for_deref(tokens[i-1].type))) {
+		tokens[i].type = TK_DEREF; 
+	}
+	
+	if (tokens[i].type == '-' && (i == 0 || certain_type_for_neg(tokens[i-1].type))) {
+		tokens[i].type = TK_NEG; 
+	}	  
+  }
+  uint32_t result = eval(0, nr_token-1);
+  return result;
   /* TODO: Insert codes to evaluate the expression. */
   TODO();
-
-  return 0;
 }

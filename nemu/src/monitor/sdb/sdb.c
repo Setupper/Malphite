@@ -3,6 +3,22 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include "sdb.h"
+#include <memory/vaddr.h>
+
+typedef struct watchpoint {
+  int NO;
+  char *EXPR;
+  int Old_value,New_value,val;
+  struct watchpoint *next;
+
+  /* TODO: Add more members if necessary */
+
+} WP;
+
+void watchpoint_all_display();
+void watchpoint_display(int N);
+bool free_wp(int N);
+WP* new_wp(char *EXPR);
 
 static int is_batch_mode = false;
 
@@ -37,6 +53,92 @@ static int cmd_q(char *args) {
   return -1;
 }
 
+static int cmd_si(char *args) {
+  char *arg = strtok(NULL, " ");
+  uint64_t n = 1; /* the default value of n is 1 */ 
+  if(arg) n = strtoull(arg, NULL, 10);  
+  cpu_exec(n); 
+  return 0;
+}
+
+static int cmd_x(char *args)  
+{  
+    char *arg1=strtok(NULL," ");  
+    char *arg2=strtok(NULL," ");  
+    int len;  
+    vaddr_t address;  
+      
+    sscanf(arg1,"%d",&len);  
+    sscanf(arg2,"%lx",&address);  
+      
+    printf("0x%lx:",address);  
+    for(int i=0;i<len;i++){  
+        printf("%lx ",vaddr_read(address,4));  
+        address+=4;  
+    }  
+    printf("\n");  
+    return 0;  
+} 
+
+static int cmd_d(char *args) {
+
+	char *argN = strtok(NULL, " ");// get the 'N'
+	if(argN == NULL) {
+		printf("please input the arg-N\n");
+		return 0;
+	} 
+
+	
+	int N = atoi(argN); /*same to sscanf(argN, "%d", &N)*/
+	if (N < 0 || N > 32) {
+		printf("%d is to large!, the range of N is 0 to %d\n", N, 32);
+		return 0;
+	}
+
+   //	printf("%d\n", N);
+  
+	if(!free_wp(N)) {
+		printf("No watchpoints number %d\n", N);	
+	}
+
+	return 0;	
+
+}
+
+static int cmd_w(char *args) {
+	
+	char *EXPR = args; 
+	WP *wp = new_wp(EXPR);
+	if(wp != NULL) 
+		printf("watchpoint %d: %s\n", wp->NO, wp->EXPR);
+	else 
+		printf("Cannot creat watchpoint: %s\n", EXPR);
+
+	return 0;
+	
+} 
+
+static int cmd_info(char *args) {
+
+  char *arg = strtok(NULL, " ");
+
+  if(strcmp(arg, "r") == 0) {
+    isa_reg_display();
+  }
+  else if(strcmp(arg, "w") == 0) {
+	watchpoint_all_display();
+  }
+  return 0;
+}
+
+static int cmd_p(char *args) {
+  bool success;
+//  printf("[p expr] args = %s \n",args);
+  uint32_t result = expr(args, &success);
+  printf("result = 0x%x %u\n", result, result);
+  return 0;  
+}
+
 static int cmd_help(char *args);
 
 static struct {
@@ -47,7 +149,12 @@ static struct {
   { "help", "Display informations about all supported commands", cmd_help },
   { "c", "Continue the execution of the program", cmd_c },
   { "q", "Exit NEMU", cmd_q },
-
+  {"info", "info r: print the state of register; info w: print the infomation of watchpoint", cmd_info },
+  {"si", "si n: Pausing the program after n step, the default n = 1",cmd_si},
+  {"x", "Calculate expressions, let it be the starting memery address, print continuous N 4 bytes.", cmd_x},
+  {"p", "Calculate expressions",cmd_p},
+  {"d", "d N,set watchpoint", cmd_d},
+  {"w", "w EXPR, stop the program when the EXPR changed", cmd_w},
   /* TODO: Add more commands */
 
 };
